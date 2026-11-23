@@ -1159,6 +1159,111 @@ function renderDca(){
   }).join(""):'<div class="empty">还没有定投计划<br><span style="font-size:12px">点右上角 + 建一个</span></div>';
 }
 
+
+/* ========== 实时检索 & 行情（腾讯公开接口） ========== */
+var seqSearch=0, remoteItems=[];
+function inject(url,charset,cb){
+  var sc=document.createElement("script");
+  sc.src=url; if(charset)sc.charset=charset;
+  var done=false;
+  sc.onload=function(){ if(done)return; done=true; cb(null); sc.remove(); };
+  sc.onerror=function(){ if(done)return; done=true; cb("err"); sc.remove(); };
+  document.body.appendChild(sc);
+  setTimeout(function(){ if(!done){ done=true; cb("timeout"); if(sc.parentNode)sc.remove(); } },7000);
+}
+function marketOf(mk){ return mk==="sh"||mk==="sz"?"A股":mk==="hk"?"港股":mk==="us"?"美股":mk==="jj"?"场外":"其他"; }
+function toItem(f){
+  var mk=f[0],code=f[1],name=f[2],type=(f[4]||"");
+  var k="stock",cy="CNY",disp=code,raw="";
+  if(mk==="sh"||mk==="sz"){
+    cy="CNY"; if(/ETF/i.test(type))k="etf"; if(/ZS/.test(type))k="etf";
+    disp=code+(mk==="sh"?".SS":".SZ"); raw=mk+code;
+  }else if(mk==="hk"){ cy="HKD"; disp=code+".HK"; raw="hk"+code; }
+  else if(mk==="us"){ cy="USD"; var base=code.split(".")[0].toUpperCase(); disp=base; raw="us"+base; }
+  else if(mk==="jj"){ cy="CNY"; k="fund"; disp=code+".OF"; raw=""; }
+  else return null;
+  return {c:disp,n:name,en:"",m:marketOf(mk),k:k,cy:cy,p:null,raw:raw};
+}
+function fetchQuote(item,cb){
+  if(!item.raw){ cb(null); return; }
+  var vn="v_"+item.raw;
+  try{ window[vn]=undefined; }catch(e){}
+  inject("https://qt.gtimg.cn/q="+item.raw,"GBK",function(){
+    var raw=window[vn]||"";
+    var f=raw.split("~");
+    var p=parseFloat(f[3]);
+    cb(isFinite(p)&&p>0?p:null);
+  });
+}
+function localSearch(kw){
+  var list=U.filter(function(x){
+    if(x.k!==sCat)return false;
+    if(sMkt!=="全部"&&x.m!==sMkt)return false;
+    return (x.c+" "+x.n+" "+x.en).toUpperCase().indexOf(kw)>=0;
+  }).map(function(x){ return {c:x.c,n:x.n,en:x.en,m:x.m,k:x.k,cy:x.cy,p:x.p,raw:""}; });
+  renderResults(list,true);
+}
+function renderResults(items,offline){
+  remoteItems=items;
+  if(!items.length){
+    $("resList").innerHTML='<div class="empty">没搜到「'+esc(($("sQuery").value||"").trim())+'」<br><span style="font-size:12px">换个代码或关键字试试</span></div>';
+    return;
+  }
+  $("resList").innerHTML='<div class="list res">'+items.map(function(x,i){
+    var bd=(x.c||x.n).replace(/[^0-9A-Za-z]/g,"").replace(/^0+/,"").slice(0,2).toUpperCase();
+    return '<div class="resrow row" data-idx="'+i+'">'+
+      '<div class="badge '+CAT[x.k].badge+'" style="width:40px;height:40px;border-radius:12px;font-size:12px">'+bd+'</div>'+
+      '<div class="grow1"><div class="nm">'+esc(x.c||x.n)+'<span class="tag">'+x.m+'</span></div>'+
+      '<div class="sb">'+esc(x.n)+'</div></div>'+
+      (x.p?'<div class="amt"><div class="v" style="font-size:13.5px">'+money(x.p,x.cy)+'</div></div>':'')+
+      '<svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg></div>';
+  }).join("")+'</div>';
+  if(offline) $("resList").insertAdjacentHTML("afterbegin",'<div style="font-size:11.5px;color:var(--ink3);margin:2px 2px 8px">离线结果（网络未返回）</div>');
+}
+function remoteSearch(kw){
+  var my=++seqSearch;
+  window.v_hint="";
+  inject("https://smartbox.gtimg.cn/s3/?q="+encodeURIComponent(kw)+"&t=all",null,function(err){
+    if(my!==seqSearch) return;
+    var raw=window.v_hint||"";
+    var items=[];
+    if(raw && raw.indexOf("~")>0){
+      items=raw.split("^").filter(Boolean).map(function(x){
+        var f=x.split("~");
+        return f.length>=5?toItem(f):null;
+      }).filter(Boolean);
+    }
+    if(!items.length && err){ localSearch(kw); return; }
+    var mk={ "全部":1 }[sMkt];
+    if(sMkt!=="全部"){
+      items=items.filter(function(x){
+        if(sCat==="fund") return x.m==="场外";
+        return x.m===sMkt && (sCat==="etf"?x.k==="etf":(sCat==="stock"?x.k==="stock":(sCat==="commodity"?false:true)));
+      });
+    }else{
+      if(sCat==="etf") items=items.filter(function(x){return x.k==="etf"});
+      else if(sCat==="stock") items=items.filter(function(x){return x.k==="stock"});
+      else if(sCat==="fund") items=items.filter(function(x){return x.k==="fund"});
+      else if(sCat==="commodity") items=items.filter(function(x){return /^(AU|AG)/.test(x.c)||x.m==="期货"});
+    }
+    renderResults(items.slice(0,30));
+  });
+}
+function pickItem(it){
+  it.p=null;
+  openBuy(it);
+  fetchQuote(it,function(p){
+    if(!p) return;
+    if(draft.item!==it) return;
+    draft.item.p=p;
+    var q=document.querySelector("#buyHead .q b");
+    if(q) q.textContent=money(p,it.cy);
+    var ub=$("useNow");
+    if(ub) ub.style.opacity=1;
+    paint();
+  });
+}
+
 /* ========== 导航 ========== */
 function go(name){
   document.querySelectorAll(".pane").forEach(function(p){p.classList.remove("on")});
@@ -1208,25 +1313,15 @@ function openSearch(cat){
   setTimeout(function(){$("sQuery").focus()},260);
 }
 function doSearch(){
-  var q=($("sQuery").value||"").trim().toUpperCase();
+  var q=($("sQuery").value||"").trim();
   $("sClear").style.display=q?"block":"none";
   $("hotBlock").style.display=q?"none":"block";
-  if(!q){$("resList").innerHTML="";return}
-  var list=U.filter(function(x){
-    if(x.k!==sCat)return false;
-    if(sMkt!=="全部"&&x.m!==sMkt)return false;
-    return (x.c+" "+x.n+" "+x.en).toUpperCase().indexOf(q)>=0;
-  }).slice(0,30);
-  $("resList").innerHTML=list.length?'<div class="list res">'+list.map(function(x){
-    return '<div class="resrow row" data-pickitem="'+x.c+'">'+
-      '<div class="badge '+CAT[x.k].badge+'" style="width:40px;height:40px;border-radius:12px;font-size:12px">'+x.c.replace(/[^0-9A-Za-z]/g,"").replace(/^0+/,"").slice(0,2).toUpperCase()+'</div>'+
-      '<div class="grow1"><div class="nm">'+esc(x.c)+'<span class="tag">'+x.m+'</span></div>'+
-      '<div class="sb">'+esc(x.en||x.n)+' · '+x.m+'</div></div>'+
-      '<div class="amt"><div class="v" style="font-size:13.5px">'+money(x.p,x.cy)+'</div></div>'+
-      '<svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg></div>';
-  }).join("")+'</div>'
-  :'<div class="empty">没搜到，换个代码试试<br><span style="font-size:12px">比如 NVDA、600519、510300</span></div>';
+  if(!q){ $("resList").innerHTML=""; return }
+  $("resList").innerHTML='<div style="font-size:12px;color:var(--ink3);padding:12px 2px">搜索中…</div>';
+  clearTimeout(sTimer);
+  sTimer=setTimeout(function(){ remoteSearch(q.toUpperCase()) },280);
 }
+var sTimer=null;
 
 /* ========== 买入 ========== */
 var draft={item:null,mode:"buy",qty:"",price:"",focus:"qty"};
@@ -1239,7 +1334,7 @@ function openBuy(item,mode){
     (item.c?item.c.replace(/[^0-9A-Za-z]/g,"").replace(/^0+/,"").slice(0,2).toUpperCase():item.n.slice(0,2))+'</div>'+
     '<div class="grow1"><div class="nm">'+esc(item.c||item.n)+'</div>'+
     '<div class="sb">'+esc(item.en||item.n)+'</div></div>'+
-    '<div class="q">'+(mode==="valued"?"":"现价")+'<b>'+(mode==="valued"?"":money(item.p,item.cy))+'</b></div>';
+    '<div class="q">'+(mode==="valued"?"":"现价")+'<b>'+(mode==="valued"?"":(item.p?money(item.p,item.cy):"—"))+'</b></div>';
 
   $("curSym").textContent=SYM[item.cy]||"¥";
   $("qtyUnit").textContent=CAT[item.k].unit;
@@ -1262,7 +1357,13 @@ function openBuy(item,mode){
       '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/></svg>按现价填充</button>'+
       '<button data-q="10">10 '+CAT[item.k].unit+'</button><button data-q="100">100 '+CAT[item.k].unit+'</button><button data-q="1000">1000 '+CAT[item.k].unit+'</button>';
     var u=$("useNow");
-    if(u)u.addEventListener("click",function(){draft.price=String(item.p);draft.focus="price";paint()});
+    if(u){
+      if(!item.p){ u.style.opacity=".45"; }
+      u.addEventListener("click",function(){
+        if(!draft.item.p){ toast("行情未取到，手动填成本价即可"); return }
+        draft.price=String(draft.item.p); draft.focus="price"; paint();
+      });
+    }
   }
   paint();
   go("buy");
@@ -1370,10 +1471,11 @@ document.addEventListener("click",function(e){
     doSearch();return}
 
   var hot=t.closest("[data-hot]");
-  if(hot){var it=U.filter(function(x){return x.c===hot.getAttribute("data-hot")})[0];if(it)openBuy(it);return}
+  if(hot){var it=U.filter(function(x){return x.c===hot.getAttribute("data-hot")})[0];
+    if(it){ it=Object.assign({},it); pickItem(it); } return}
 
-  var pi=t.closest("[data-pickitem]");
-  if(pi){var it2=U.filter(function(x){return x.c===pi.getAttribute("data-pickitem")})[0];if(it2)openBuy(it2);return}
+  var pi=t.closest("[data-idx]");
+  if(pi){var it2=remoteItems[+pi.getAttribute("data-idx")];if(it2)pickItem(it2);return}
 
   var fc=t.closest("[data-f]");
   if(fc){draft.focus=fc.getAttribute("data-f");paint();return}
