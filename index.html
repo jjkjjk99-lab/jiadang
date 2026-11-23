@@ -1417,7 +1417,7 @@ function openConfirm(){
   var it=draft.item,q=parseFloat(draft.qty)||0,p=draft.mode==="valued"?0:parseFloat(draft.price)||0;
   if(draft.mode!=="valued"&&(!q||!p)){toast("请填数量和成本价");return}
   if(draft.mode==="valued"&&!q){toast("请填金额");return}
-  pending={item:it,qty:q,price:p,mode:draft.mode,total:draft.mode==="valued"?q:p*q};
+  pending={item:it,qty:q,price:p,mode:draft.mode,total:draft.mode==="valued"?q:p*q,date:today()};
   var key=it.c?it.c.replace(/[^0-9A-Za-z]/g,"").replace(/^0+/,"").slice(0,2).toUpperCase():it.n.slice(0,2);
   $("cfHero").innerHTML='<div class="badge '+CAT[it.k].badge+'">'+key+'</div>'+
     '<h3>'+esc(it.en||it.n)+'</h3><p>'+(it.c?esc(it.c)+' · ':'')+CAT[it.k].n+'</p>';
@@ -1429,7 +1429,11 @@ function openConfirm(){
         '<div class="k"><span>成本价</span><b>'+money(pending.price,it.cy)+'</b></div>'+
         '<div class="k"><span>总成本</span><b class="gold">'+money(pending.total,it.cy)+'</b></div>')+
     '<div class="k"><span>计价币种</span><b>'+it.cy+'</b></div>'+
-    '<div class="k"><span>起始日期</span><b>今天 ›</b></div>';
+    '<label class="k" style="position:relative"><span>起始日期</span>'+
+      '<b id="cfDateLab" style="display:flex;align-items:center;gap:5px">'+(pending.date===today()?"今天":pending.date)+
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 5 7 7-7 7"/></svg></b>'+
+      '<input type="date" id="cfDate" value="'+pending.date+'" style="position:absolute;inset:0;width:100%;opacity:0;border:none;background:none">'+
+    '</label>';
   $("cfNotes").innerHTML=
     '<div class="note"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 13 4 4L19 7" stroke-linecap="round"/></svg>'+
     '<div>'+(draft.mode==="valued"?"将以今日作为估值起点，之后你可以随时改数。":
@@ -1437,6 +1441,12 @@ function openConfirm(){
     '<div class="note" style="background:var(--sunk);color:var(--ink2)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8.2v.2" stroke-linecap="round"/></svg>'+
     '<div>添加后每天自动更新行情；成本价按你输入的买入价记录。</div></div>';
   go("confirm");
+  var di=$("cfDate");
+  if(di) di.addEventListener("change",function(){
+    pending.date=di.value||today();
+    $("cfDateLab").innerHTML=(pending.date===today()?"今天":pending.date)+
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 5 7 7-7 7"/></svg>';
+  });
 }
 
 /* ========== 事件 ========== */
@@ -1495,7 +1505,7 @@ document.addEventListener("click",function(e){
       p:pending.mode==="valued"?0:it.p,val:pending.mode==="valued"?pending.total:null};
     S.assets.push(a);
     if(pending.mode==="valued"){a.p=0}
-    else S.tx.push({id:"t"+Date.now(),a:a.id,kind:"buy",qty:pending.qty,price:pending.price,date:today(),note:"建仓"});
+    else S.tx.push({id:"t"+Date.now(),a:a.id,kind:"buy",qty:pending.qty,price:pending.price,date:(pending.date||today()),note:"建仓"});
     save();toast("已添加");S.filter="all";go("holdings");return;
   }
 
